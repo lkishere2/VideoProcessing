@@ -1,0 +1,9 @@
+anthropic
+ffmpeg-python
+fastapi
+uvicorn
+python-multipart
+aiofiles
+python-dotenv
+torch\ntransformers\neinops\nopenai-whisper\nPillow
+torchvision
