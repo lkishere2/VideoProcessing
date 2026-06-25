@@ -12,8 +12,8 @@ import anthropic
 from PIL import Image, ImageDraw, ImageFont
 
 from frame_processing import extract_frames, frame_to_base64
-from voice_processing import extract_audio, transcribe_audio
-from vision_processing import caption_frame
+# from voice_processing import extract_audio, transcribe_audio
+# from vision_processing import caption_frame
 
 async def process_video_endpoint(file: UploadFile = File(...), fps: int = Form(1)):
     video_id = str(uuid.uuid4())

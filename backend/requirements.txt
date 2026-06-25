@@ -5,5 +5,9 @@ uvicorn
 python-multipart
 aiofiles
 python-dotenv
-torch\ntransformers\neinops\nopenai-whisper\nPillow
-torchvision
+Pillow
+# torch
+# transformers
+# einops
+# openai-whisper
+# torchvision

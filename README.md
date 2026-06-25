@@ -21,18 +21,55 @@ The architecture is split into a **Vite React Frontend** and a **FastAPI Python 
 
 ### Prerequisites
 You must have **FFmpeg** installed on your system.
+
+**Linux (Ubuntu/Debian):**
 ```bash
 sudo apt update
 sudo apt install ffmpeg
 ```
 
+**macOS (using Homebrew):**
+```bash
+brew install ffmpeg
+```
+
+**Windows:**
+1. Download a pre-built FFmpeg release (e.g., from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/)).
+2. Extract the archive and copy the `bin` folder contents to a directory (e.g., `C:\ffmpeg\bin`).
+3. Add that directory to your System PATH environment variable.
+
 ### 1. Start the Backend
 The backend runs in an isolated Python virtual environment.
+
+**On macOS and Linux:**
 ```bash
-cd backend
+# From the project root, create a virtual environment (only needed once)
+python3 -m venv venv
 
 # Activate the virtual environment
-source ../venv/bin/activate
+source venv/bin/activate
+
+cd backend
+
+# Install Python dependencies (only needed once)
+pip install -r requirements.txt
+
+# Start the FastAPI Server
+uvicorn main:app --reload --port 8000
+```
+
+**On Windows:**
+```powershell
+# From the project root, create a virtual environment (only needed once)
+python -m venv venv
+
+# Activate the virtual environment
+.\venv\Scripts\activate
+
+cd backend
+
+# Install Python dependencies (only needed once)
+pip install -r requirements.txt
 
 # Start the FastAPI Server
 uvicorn main:app --reload --port 8000
