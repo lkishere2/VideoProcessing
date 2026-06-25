@@ -13,7 +13,7 @@ export const VideoProvider = ({ children }) => {
 
   const addFilesToQueue = (filesArray) => {
     const newVideos = filesArray.map(file => ({
-      id: crypto.randomUUID(),
+      id: Date.now().toString(36) + Math.random().toString(36).substring(2),
       file: file,
       status: 'pending',
       frames: [],
@@ -54,7 +54,8 @@ export const VideoProvider = ({ children }) => {
 
     } catch (err) {
       console.error(err);
-      updateVideoState(vid.id, { status: 'error', errorMsg: err.message || 'An error occurred' });
+      const errorMessage = err.response?.data?.detail || err.message || 'An error occurred';
+      updateVideoState(vid.id, { status: 'error', errorMsg: errorMessage });
     }
   };
 

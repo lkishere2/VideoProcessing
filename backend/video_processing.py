@@ -12,8 +12,7 @@ import anthropic
 from PIL import Image, ImageDraw, ImageFont
 
 from frame_processing import extract_frames, frame_to_base64
-# from voice_processing import extract_audio, transcribe_audio
-# from vision_processing import caption_frame
+from voice_processing import extract_audio, transcribe_audio
 
 async def process_video_endpoint(file: UploadFile = File(...), fps: int = Form(1)):
     video_id = str(uuid.uuid4())
@@ -26,20 +25,33 @@ async def process_video_endpoint(file: UploadFile = File(...), fps: int = Form(1
             
         frame_results = extract_frames(video_path, temp_dir, max_frames=50)
         
+        audio_path = extract_audio(video_path, temp_dir)
+        voice_segments = transcribe_audio(audio_path)
+        
         frames_data = []
         for index, (frame_path, timestamp) in enumerate(frame_results):
-            t1 = timestamp
+            t1 = 0.0 if index == 0 else frame_results[index - 1][1]
             t2 = timestamp
             
             b64 = frame_to_base64(frame_path)
+            
+            # Find all audio segments that overlap with the [t1, t2] window
+            chunk_voice = []
+            for seg in voice_segments:
+                seg_start = seg.get("start", 0.0)
+                seg_end = seg.get("end", 0.0)
+                # Overlap logic: max(t1, start) < min(t2, end)
+                if max(t1, seg_start) < min(t2, seg_end):
+                    chunk_voice.append(seg.get("text", "").strip())
+            
+            voice_text = " ".join(chunk_voice).strip()
             
             frames_data.append({
                 "t1": t1,
                 "t2": t2,
                 "execution_time": 0.0,
                 "base64": f"data:image/jpeg;base64,{b64}",
-                "vision_text": "",
-                "voice_text": ""
+                "voice_text": voice_text
             })
             
     return {"video_id": video_id, "frames": frames_data}
@@ -56,8 +68,8 @@ async def summarize_endpoint(request: SummarizeRequest):
     
     content_blocks = [
         {
-            "type": "text", 
-            "text": "These are sequential frames from a video, stitched into grids of up to 10 images each (read left-to-right, top-to-bottom). Timestamps are in the top left of each frame. Please provide a clear summary of what happens: what is shown, what actions occur, and any key details you notice."
+            "type": "text",
+            "text": "Watch these video frames and transcript, then provide a detailed and extended summary of what the video is about. Please include a detailed chronological breakdown of key events and scenes. Also, at the very beginning of your response, specify the category that this video best fits into (e.g., E-commerce, User Generated Content (UGC), Educational, Entertainment, etc.) formatted as '**Category:** [Your Category]'. Do not output any other conversational filler, just the requested information formatted in Markdown."
         }
     ]
     
@@ -128,39 +140,41 @@ async def summarize_endpoint(request: SummarizeRequest):
                 "data": grid_b64
             }
         })
+        
+    # Append the chronological audio transcript timeline
+    transcript_lines = []
+    for f in frames:
+        if f.get('voice_text'):
+            transcript_lines.append(f"[{f['t1']:.1f}s - {f['t2']:.1f}s]: {f['voice_text']}")
+            
+    if transcript_lines:
+        transcript_block = "Chronological Audio Transcript:\n" + "\n".join(transcript_lines)
+        content_blocks.append({
+            "type": "text",
+            "text": transcript_block
+        })
 
-    client = anthropic.Anthropic()
-    response = client.messages.create(
-        model="claude-3-5-sonnet-20241022",
-        max_tokens=2048,
-        messages=[{
-            "role": "user", 
-            "content": content_blocks
-        }],
-    )
+    try:
+        client = anthropic.Anthropic()
+        response = client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=2048,
+            messages=[{
+                "role": "user",
+                "content": content_blocks
+            }],
+        )
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(e))
+
     analyze_time = time.time() - start_time
-    summary = response.content[0].text
-    
+    summary = response.content[0].text.strip()
+
     in_tokens = response.usage.input_tokens
     out_tokens = response.usage.output_tokens
     vid_cost = ((in_tokens / 1_000_000) * 3.00) + ((out_tokens / 1_000_000) * 15.00)
 
-    # Save to outputs.md
-    output_text = f"\n## Video: {video_id}\n"
-    output_text += f"- **Number of frames**: {len(frames)}\n"
-    output_text += f"- **Time**: {analyze_time:.2f} seconds\n"
-    output_text += f"- **Cost**: ${vid_cost:.4f}\n"
-    output_text += f"\n### Summary\n{summary}\n"
-    
-    output_filename = os.path.join("outputs", "output.md")
-    counter = 2
-    while os.path.exists(output_filename):
-        output_filename = os.path.join("outputs", f"output({counter}).md")
-        counter += 1
-
-    with open(output_filename, "w", encoding="utf-8") as f:
-        f.write("# Video Analysis Output\n" + output_text)
-            
     return {
         "summary": summary,
         "input_tokens": in_tokens,

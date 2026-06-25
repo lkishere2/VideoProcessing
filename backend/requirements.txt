@@ -6,8 +6,5 @@ python-multipart
 aiofiles
 python-dotenv
 Pillow
-# torch
-# transformers
-# einops
-# openai-whisper
-# torchvision
+torch
+openai-whisper

@@ -54,8 +54,8 @@ cd backend
 # Install Python dependencies (only needed once)
 pip install -r requirements.txt
 
-# Start the FastAPI Server
-uvicorn main:app --reload --port 8000
+# Start the FastAPI Server (binds to all network interfaces for --host testing)
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 **On Windows:**
@@ -72,7 +72,7 @@ cd backend
 pip install -r requirements.txt
 
 # Start the FastAPI Server
-uvicorn main:app --reload --port 8000
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 *Make sure you have an `.env` file in the root containing your `ANTHROPIC_API_KEY`!*
 

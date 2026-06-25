@@ -13,12 +13,11 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-os.makedirs("outputs", exist_ok=True)
 
 # Register routes
 app.post("/api/process_video")(process_video_endpoint)

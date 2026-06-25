@@ -52,8 +52,13 @@ export default function ImageModal({ frames, selectedIndex, setSelectedIndex, on
       <div className="modal-content" onClick={e => e.stopPropagation()}>
         <button className="modal-close" onClick={onClose}>&times;</button>
         <img src={image.base64} alt="Full resolution frame" className="modal-image" />
-        <div className="modal-caption">
-          {selectedIndex + 1} / {frames.length} | Timestamp: {formatTime(image.t1)}
+        <div className="modal-caption" style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div>{selectedIndex + 1} / {frames.length} | Timestamp: {formatTime(image.t1)} - {formatTime(image.t2)}</div>
+          {image.voice_text && (
+            <div style={{color: '#aaa', fontSize: '0.9rem', fontStyle: 'italic'}}>
+              🎙️ "{image.voice_text}"
+            </div>
+          )}
         </div>
       </div>
       

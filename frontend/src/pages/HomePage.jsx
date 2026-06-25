@@ -1,9 +1,18 @@
+import { useState, useEffect } from 'react';
 import UploadSection from '../components/UploadSection';
 import VideoItem from '../components/VideoItem';
+import FinalResultBox from '../components/FinalResultBox';
 import { useVideoContext } from '../context/VideoContext';
 
 export default function HomePage() {
   const { videos, globalStatus, processAllVideos, clearQueue } = useVideoContext();
+  const [showResultBox, setShowResultBox] = useState(false);
+
+  useEffect(() => {
+    if (globalStatus === 'complete' && videos.length > 0) {
+      setShowResultBox(true);
+    }
+  }, [globalStatus, videos.length]);
 
   return (
     <div className="dashboard">
@@ -42,6 +51,10 @@ export default function HomePage() {
             <VideoItem key={vid.id} video={vid} />
           ))}
         </div>
+      )}
+
+      {showResultBox && (
+        <FinalResultBox videos={videos} onClose={() => setShowResultBox(false)} />
       )}
     </div>
   );
