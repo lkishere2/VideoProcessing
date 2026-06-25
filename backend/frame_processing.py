@@ -1,5 +1,4 @@
 import os
-import subprocess
 import base64
 import re
 
@@ -7,8 +6,20 @@ def frame_to_base64(path: str) -> str:
     with open(path, "rb") as f:
         return base64.standard_b64encode(f.read()).decode("utf-8")
 
-def extract_frames(video_path: str, temp_dir: str, max_frames: int = 50):
+import subprocess
+
+def extract_frames(video_path: str, temp_dir: str, max_frames: int = 100):
+    import subprocess
+    duration_str = subprocess.check_output(["ffmpeg", "-i", video_path, "-to", "00:00:01", "-c", "copy", "-f", "null", "-"], stderr=subprocess.STDOUT).decode().split("Duration:")[1].split(",")[0].strip()
+    h, m, s = duration_str.split(':')
+    duration = int(h) * 3600 + int(m) * 60 + float(s)
+    category = 'short' if duration <= 60 else 'medium' if duration <= 180 else 'long'
+    min_frames = 10 if category == 'short' else 15 if category == 'medium' else 20
     pattern = os.path.join(temp_dir, "frame_%04d.jpg")
+    def calculate_num_frames(results, min_frames):
+        num_frames = min(sum([x[1] for x in results]), 100)
+        return max(num_frames, min_frames)
+        pattern = os.path.join(temp_dir, "frame_%04d.jpg")
     
     # We use subprocess directly to capture stderr which contains the 'showinfo' logs
     command = [
@@ -52,7 +63,7 @@ def extract_frames(video_path: str, temp_dir: str, max_frames: int = 50):
     # Cap the absolute maximum number of frames sent to Claude
     if len(results) > max_frames:
         step = len(results) / max_frames
-        sampled_results = [results[int(i * step)] for i in range(max_frames)]
-        return sampled_results
+        results = [results[int(i * step)] for i in range(max_frames)]
         
-    return results
+    num_frames = calculate_num_frames(results, min_frames)
+    return sorted(results, key=lambda x: x[1], reverse=True)[:num_frames]
