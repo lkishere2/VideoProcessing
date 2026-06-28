@@ -17,10 +17,27 @@ export const VideoProvider = ({ children }) => {
       file: file,
       status: 'pending',
       frames: [],
+      voiceSegments: [],
       summaryData: null,
-      errorMsg: ''
+      errorMsg: '',
+      metrics: {}
     }));
     setVideos(prev => [...prev, ...newVideos]);
+  };
+
+  const addUrlToQueue = (url) => {
+    const newVideo = {
+      id: Date.now().toString(36) + Math.random().toString(36).substring(2),
+      url: url,
+      file: { name: url }, // Mock file object for UI rendering
+      status: 'pending',
+      frames: [],
+      voiceSegments: [],
+      summaryData: null,
+      errorMsg: '',
+      metrics: {}
+    };
+    setVideos(prev => [...prev, newVideo]);
   };
 
   const updateVideoState = (id, updates) => {
@@ -34,20 +51,36 @@ export const VideoProvider = ({ children }) => {
       updateVideoState(vid.id, { status: 'extracting' });
       
       const formData = new FormData();
-      formData.append('file', vid.file);
+      if (vid.url) {
+        formData.append('url', vid.url);
+      } else {
+        formData.append('file', vid.file);
+      }
       formData.append('fps', 1);
       
       const extractRes = await axios.post(`${API_BASE}/process_video`, formData);
       if (extractRes.data.error) throw new Error(extractRes.data.error);
 
-      const { video_id, frames } = extractRes.data;
-      updateVideoState(vid.id, { status: 'showing_frames', frames: frames });
+      // voice_segments holds the audio-pipeline's detected chunks:
+      // [{ start, end, text, emotion }, ...] - captured here and passed
+      // through to /api/summarize so the enriched transcript actually
+      // reaches Nova, and kept in state so the UI can show what audio
+      // chunks were detected.
+      const { video_id, video_title, frames, voice_segments, metrics } = extractRes.data;
+      updateVideoState(vid.id, {
+        status: 'showing_frames',
+        frames: frames,
+        voiceSegments: voice_segments || [],
+        metrics: metrics || {},
+        file: { name: video_title || vid.file.name }
+      });
       await new Promise(resolve => setTimeout(resolve, 1500));
 
       updateVideoState(vid.id, { status: 'summarizing' });
       const summarizeRes = await axios.post(`${API_BASE}/summarize`, {
         video_id: video_id,
-        frames: frames
+        frames: frames,
+        voice_segments: voice_segments || [],
       });
       
       updateVideoState(vid.id, { status: 'complete', summaryData: summarizeRes.data });
@@ -62,7 +95,26 @@ export const VideoProvider = ({ children }) => {
   const processAllVideos = async () => {
     if (videos.length === 0) return;
     setGlobalStatus('processing');
-    await Promise.all(videos.map(vid => processSingleVideo(vid)));
+
+    const CONCURRENCY_LIMIT = 10;
+    const queue = [...videos];
+
+    // Worker loops that pull from the same shared queue
+    const worker = async () => {
+      while (queue.length > 0) {
+        const vid = queue.shift();
+        if (vid) {
+          await processSingleVideo(vid);
+        }
+      }
+    };
+
+    // Spin up workers up to the concurrency limit
+    const workers = Array(Math.min(CONCURRENCY_LIMIT, queue.length))
+      .fill(null)
+      .map(worker);
+
+    await Promise.all(workers);
     setGlobalStatus('complete');
   };
 
@@ -72,7 +124,7 @@ export const VideoProvider = ({ children }) => {
   };
 
   return (
-    <VideoContext.Provider value={{ videos, globalStatus, addFilesToQueue, processAllVideos, clearQueue }}>
+    <VideoContext.Provider value={{ videos, globalStatus, addFilesToQueue, addUrlToQueue, processAllVideos, clearQueue }}>
       {children}
     </VideoContext.Provider>
   );

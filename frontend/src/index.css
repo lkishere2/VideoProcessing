@@ -1,17 +1,17 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 
 :root {
-  --bg-main: #f4f4f9;
-  --bg-secondary: #ffffff;
-  --primary: #7C3AED;
-  --primary-hover: #6D28D9;
-  --text-main: #111827;
-  --text-muted: #6B7280;
-  --glass-bg: rgba(255, 255, 255, 0.85);
-  --glass-border: rgba(255, 255, 255, 1);
+  --bg-main: #090D1A;
+  --bg-secondary: #121829;
+  --primary: #8B5CF6;
+  --primary-hover: #7C3AED;
+  --text-main: #F3F4F6;
+  --text-muted: #9CA3AF;
+  --glass-bg: rgba(18, 24, 41, 0.7);
+  --glass-border: rgba(255, 255, 255, 0.08);
   --accent: #10B981;
-  --shadow: rgba(0, 0, 0, 0.06);
-  --shadow-hover: rgba(124, 58, 237, 0.15);
+  --shadow: rgba(0, 0, 0, 0.4);
+  --shadow-hover: rgba(139, 92, 246, 0.2);
 }
 
 * {
@@ -22,7 +22,7 @@
 
 body {
   font-family: 'Inter', sans-serif;
-  background: var(--bg-main);
+  background: radial-gradient(circle at 50% 0%, #1e1b4b 0%, #090d1a 100%);
   color: var(--text-main);
   min-height: 100vh;
   display: flex;
@@ -124,14 +124,15 @@ body {
 }
 
 .btn-secondary {
-  background: #E5E7EB;
+  background: rgba(255, 255, 255, 0.07);
   color: var(--text-main);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: none;
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background: #D1D5DB;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
 }
 
 .btn:disabled {
@@ -165,7 +166,7 @@ body {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 15px;
-  border-bottom: 1px solid #E5E7EB;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   padding-bottom: 12px;
 }
 
@@ -214,7 +215,7 @@ body {
   padding: 15px;
   border-radius: 12px;
   background: var(--bg-secondary);
-  border: 1px solid #E5E7EB;
+  border: 1px solid rgba(255, 255, 255, 0.06);
   transition: all 0.3s ease;
 }
 
@@ -235,7 +236,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #E5E7EB;
+  background: rgba(255, 255, 255, 0.1);
   margin-right: 12px;
   font-size: 0.8rem;
   color: white;
@@ -268,7 +269,7 @@ body {
   padding: 0;
   border-radius: 12px;
   overflow: hidden;
-  border: 1px solid #E5E7EB;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
   position: relative;
   background: var(--bg-secondary);
@@ -289,10 +290,10 @@ body {
   font-size: 0.75rem;
   color: var(--text-main);
   padding: 6px 0;
-  background: #F3F4F6;
+  background: #171E30;
   font-family: 'Inter', monospace;
   font-weight: 600;
-  border-bottom: 1px solid #E5E7EB;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .frame-item img {
@@ -317,7 +318,7 @@ body {
 .summary-box {
   margin-top: 20px;
   padding: 20px;
-  background: #F9FAFB;
+  background: rgba(255, 255, 255, 0.02);
   border-radius: 12px;
   border-left: 4px solid var(--accent);
 }
@@ -365,7 +366,7 @@ body {
   gap: 20px;
   margin-top: 20px;
   padding-top: 15px;
-  border-top: 1px solid #E5E7EB;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .stat-item {

@@ -1,0 +1,39 @@
+{
+  "duration_sec": 6.0,
+  "n_speakers_detected": 5,
+  "emotional_tone": "Excited",
+  "prosody": {
+    "mean_pitch_hz": 304.2,
+    "rms_volume": 0.2142,
+    "tempo_bpm": 117.2
+  },
+  "transcript": "[transcription unavailable: ]",
+  "bursts_sec": [
+    0.96,
+    3.168
+  ],
+  "segments_sec": [
+    [
+      0.46,
+      2.068
+    ],
+    [
+      2.668,
+      4.276
+    ]
+  ],
+  "chunks": [
+    {
+      "file": "test_output/chunk_000_0.46-2.07.wav",
+      "start_sec": 0.46,
+      "end_sec": 2.068,
+      "duration_sec": 1.608
+    },
+    {
+      "file": "test_output/chunk_001_2.67-4.28.wav",
+      "start_sec": 2.668,
+      "end_sec": 4.276,
+      "duration_sec": 1.608
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 import ReactMarkdown from 'react-markdown';
 
-export default function SummarySection({ summaryData, totalExecutionTime }) {
+export default function SummarySection({ summaryData, totalExecutionTime, metrics }) {
   if (!summaryData) return null;
 
   return (
@@ -17,12 +17,16 @@ export default function SummarySection({ summaryData, totalExecutionTime }) {
           <span className="stat-value">{summaryData.frames_count}</span>
         </div>
         <div className="stat-item">
-          <span className="stat-label">Vision AI Time</span>
-          <span className="stat-value">{totalExecutionTime.toFixed(2)}s</span>
+          <span className="stat-label">Frame Extraction</span>
+          <span className="stat-value">{metrics?.frame_processing_sec?.toFixed(2) || '0.00'}s</span>
         </div>
         <div className="stat-item">
-          <span className="stat-label">Claude API Time</span>
-          <span className="stat-value">{summaryData.analyze_time.toFixed(2)}s</span>
+          <span className="stat-label">Audio Extraction</span>
+          <span className="stat-value">{metrics?.audio_processing_sec?.toFixed(2) || '0.00'}s</span>
+        </div>
+        <div className="stat-item">
+          <span className="stat-label">LLM Inference</span>
+          <span className="stat-value">{summaryData.llm_inference_time_sec?.toFixed(2) || '0.00'}s</span>
         </div>
         <div className="stat-item">
           <span className="stat-label">Tokens (In / Out)</span>

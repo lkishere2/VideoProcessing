@@ -1,5 +1,6 @@
 import { useParams, useNavigate } from 'react-router-dom';
 import { useVideoContext } from '../context/VideoContext';
+import AudioSection from '../components/AudioSection';
 import SummarySection from '../components/SummarySection';
 import ImageSection from '../components/ImageSection';
 
@@ -36,6 +37,8 @@ export default function ResultPage() {
         <button className="btn btn-secondary" onClick={() => navigate('/')}>&larr; Back to Dashboard</button>
       </div>
 
+      {status === 'complete' && <AudioSection voiceSegments={video.voiceSegments} />}
+
       <div className="glass-panel video-card" style={{marginBottom: '20px'}}>
         <div className="video-card-header">
           <h3>Status Overview</h3>
@@ -65,7 +68,7 @@ export default function ResultPage() {
           </div>
         )}
 
-        {status === 'complete' && <SummarySection summaryData={summaryData} totalExecutionTime={totalExecutionTime} />}
+        {status === 'complete' && <SummarySection summaryData={summaryData} totalExecutionTime={totalExecutionTime} metrics={video.metrics} />}
       </div>
 
       <ImageSection frames={frames} filename={file.name} />

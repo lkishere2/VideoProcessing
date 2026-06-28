@@ -3,6 +3,12 @@ import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import { useState } from 'react';
 
+function formatTime(seconds) {
+  const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+  const s = (Math.floor(seconds % 60)).toString().padStart(2, '0');
+  return `${m}:${s}`;
+}
+
 export default function FinalResultBox({ videos, onClose }) {
   const [isZipping, setIsZipping] = useState(false);
 
@@ -11,7 +17,11 @@ export default function FinalResultBox({ videos, onClose }) {
 
   if (completedVideos.length === 0) return null;
 
-  const totalTime = completedVideos.reduce((acc, vid) => acc + (vid.summaryData.analyze_time || 0), 0);
+  const totalTime = completedVideos.reduce((acc, vid) => acc + 
+    (vid.summaryData.llm_inference_time_sec || 0) + 
+    (vid.metrics?.frame_processing_sec || 0) + 
+    (vid.metrics?.audio_processing_sec || 0)
+  , 0);
   const totalCost = completedVideos.reduce((acc, vid) => acc + (vid.summaryData.cost || 0), 0);
   const totalTokens = completedVideos.reduce((acc, vid) => 
     acc + (vid.summaryData.input_tokens || 0) + (vid.summaryData.output_tokens || 0)
@@ -49,6 +59,18 @@ export default function FinalResultBox({ videos, onClose }) {
               framesFolder.file(`frame_${index}_voice.txt`, frameData.voice_text);
             }
           });
+        }
+
+        // 4. Add the audio-pipeline transcript (significant chunks, with
+        // tone tags) as its own file, separate from the per-frame voice
+        // text above - this is the same data shown in the Audio Chunks
+        // panel on the result page.
+        if (vid.voiceSegments && vid.voiceSegments.length > 0) {
+          const sorted = [...vid.voiceSegments].sort((a, b) => a.start - b.start);
+          const transcriptLines = sorted.map(seg =>
+            `[${formatTime(seg.start)} - ${formatTime(seg.end)}, ${seg.emotion || 'Neutral'}] ${seg.text || '(no speech detected)'}`
+          );
+          videoFolder.file('transcript.txt', transcriptLines.join('\n'));
         }
       }
 
