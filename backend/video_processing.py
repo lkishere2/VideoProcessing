@@ -45,6 +45,7 @@ from PIL import Image
 from frame_processing import extract_media_pyav, frame_to_base64
 from voice_processing import transcribe_audio
 from downloader import download_video
+from audio_pipeline import detect_sound_bursts, cluster_significant_points
 from typing import Optional
 
 
@@ -101,6 +102,9 @@ async def process_video_endpoint(
     http_headers = None
 
     try:
+        # === PHASE 1: INGESTION & URL RESOLUTION ===
+        print(f"[Phase 1/4] Ingesting video source...")
+        ingest_start = time.time()
         if file:
             # --- Upload validation ---
             if not file.filename or "." not in file.filename:
@@ -130,14 +134,21 @@ async def process_video_endpoint(
 
             # Pass the SpooledTemporaryFile stream directly
             video_source = file.file
+            ingest_time = time.time() - ingest_start
+            print(f"  - [Step 1.1] Verifying uploaded file: {ingest_time:.3f}s (Size: {size} bytes)")
         else:
             # Bypasses local download and resolve direct streaming URL instead
             try:
+                download_start = time.time()
                 video_source, video_title, http_headers = await asyncio.to_thread(download_video, url)
                 is_temp_download = False
+                ingest_time = time.time() - download_start
+                print(f"  - [Step 1.1] Resolving direct streaming URL: {ingest_time:.3f}s")
             except Exception as e:
                 raise HTTPException(status_code=400, detail=str(e))
 
+        # === PHASE 2: PYAV STREAM EXTRACTION ===
+        print(f"[Phase 2/4] Starting PyAV stream extraction...")
         extraction_start = time.time()
         
         loop = asyncio.get_running_loop()
@@ -153,6 +164,34 @@ async def process_video_endpoint(
         total_media_time = time.time() - extraction_start
         audio_time = round(audio_time_extracted, 3)
         frame_time = round(total_media_time - audio_time_extracted, 3)
+        print(f"  - [Step 2.4] Complete PyAV Phase duration: {total_media_time:.3f}s")
+
+        # === PHASE 3: AUDIO SIGNAL PROCESSING ===
+        print(f"[Phase 3/4] Processing audio signals...")
+        duration_sec = len(audio_array) / 16000 if audio_array is not None else 0.0
+        important_segments = []
+        if audio_array is not None and len(audio_array) > 0:
+            try:
+                # Time burst detection
+                burst_start = time.time()
+                bursts = detect_sound_bursts(audio_array, 16000)
+                burst_time = time.time() - burst_start
+                print(f"  - [Step 3.1] Sound burst detection: {burst_time:.3f}s (Found {len(bursts)} bursts)")
+
+                # Time clustering
+                cluster_start = time.time()
+                important_segments = cluster_significant_points(duration_sec, [], bursts, max_clusters=10)
+                cluster_time = time.time() - cluster_start
+                print(f"  - [Step 3.2] Temporal gap merging & clustering: {cluster_time:.3f}s (Merged into {len(important_segments)} segments)")
+            except Exception as e:
+                print(f"  - [Step 3.x] Sound burst detection failed: {e}")
+
+        # === PHASE 4: ENCODING & AUDIO SLICING ===
+        print(f"[Phase 4/4] Encoding payloads & slicing audio...")
+        encoding_start = time.time()
+        
+        b64_accumulated_time = 0.0
+        slice_accumulated_time = 0.0
 
         # Whisper transcription bypassed to prioritize speed
         voice_segments = []
@@ -162,21 +201,17 @@ async def process_video_endpoint(
             t1 = 0.0 if index == 0 else frame_results[index - 1][1]
             t2 = timestamp
 
+            b64_start = time.time()
             b64 = frame_to_base64(frame_path)
+            b64_accumulated_time += (time.time() - b64_start)
 
-            # Find all audio segments that overlap with the [t1, t2] window.
-            chunk_voice = []
-            for seg in voice_segments:
-                seg_start = seg.get("start", 0.0)
-                seg_end = seg.get("end", 0.0)
-                if max(t1, seg_start) < min(t2, seg_end):
-                    chunk_voice.append(seg.get("text", "").strip())
+            voice_text = ""
 
-            voice_text = " ".join(chunk_voice).strip()
-
-            # Cut audio chunk corresponding to [t1, t2]
+            slice_start = time.time()
             audio_b64 = None
-            if audio_array is not None and len(audio_array) > 0:
+            is_important = any(max(t1, seg_start) < min(t2, seg_end) for seg_start, seg_end in important_segments)
+            
+            if is_important and audio_array is not None and len(audio_array) > 0:
                 try:
                     import soundfile as sf
                     import io
@@ -190,6 +225,7 @@ async def process_video_endpoint(
                         audio_b64 = "data:audio/wav;base64," + base64.b64encode(wav_io.getvalue()).decode("ascii")
                 except Exception as e:
                     print(f"[video_processing] failed to slice/encode frame audio: {e}")
+            slice_accumulated_time += (time.time() - slice_start)
 
             frames_data.append({
                 "t1": t1,
@@ -199,6 +235,12 @@ async def process_video_endpoint(
                 "audio": audio_b64,
                 "voice_text": voice_text,
             })
+
+        print(f"  - [Step 4.1] Frame image base64 encoding: {b64_accumulated_time:.3f}s")
+        print(f"  - [Step 4.2] Audio slicing & WAV base64 encoding: {slice_accumulated_time:.3f}s (Sliced {sum(1 for f in frames_data if f['audio'])} segments)")
+        
+        total_encoding_time = time.time() - encoding_start
+        print(f"  - [Step 4.3] Complete Encoding Phase duration: {total_encoding_time:.3f}s")
 
         return {
             "video_id": video_id, 
@@ -248,10 +290,6 @@ def _build_sprite_sheets(frames: List[dict], chunk_size: int = 10, target_width:
             b64_data = f['base64'].split(',')[1] if ',' in f['base64'] else f['base64']
             img_data = base64.b64decode(b64_data)
             img = Image.open(io.BytesIO(img_data)).convert('RGB')
-
-            aspect = img.height / img.width
-            new_h = int(target_width * aspect)
-            img = img.resize((target_width, new_h), Image.Resampling.LANCZOS)
 
             pil_images.append(img)
             chunk_timestamps.append(f.get('t1', 0.0))
@@ -357,6 +395,7 @@ async def summarize_endpoint(request: SummarizeRequest):
 
     messages = [{"role": "user", "content": content_blocks}]
 
+    print(f"[Summarize] Sending request to Bedrock Model ({BEDROCK_MODEL_ID})...")
     try:
         start_llm = time.time()
         client = get_bedrock_client()
@@ -368,6 +407,8 @@ async def summarize_endpoint(request: SummarizeRequest):
     
     llm_time = round(time.time() - start_llm, 3)
     analyze_time = round(time.time() - start_time, 3)
+    print(f"  - [Summarize Step] Bedrock API converse call: {llm_time:.3f}s")
+    print(f"  - [Summarize Step] Total endpoint processing: {analyze_time:.3f}s")
 
     # Defensive parsing: concatenate all text blocks rather than indexing [0].
     output_content = response["output"]["message"]["content"]

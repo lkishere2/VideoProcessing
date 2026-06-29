@@ -59,6 +59,19 @@ export default function ImageModal({ frames, selectedIndex, setSelectedIndex, on
               🎙️ "{image.voice_text}"
             </div>
           )}
+          {image.audio && (
+            <div style={{ marginTop: '4px', width: '100%', display: 'flex', justifyContent: 'center' }}>
+              <audio 
+                controls 
+                src={image.audio} 
+                style={{ 
+                  width: '100%', 
+                  height: '32px',
+                  filter: 'invert(0.9) hue-rotate(180deg) opacity(0.85)'
+                }} 
+              />
+            </div>
+          )}
         </div>
       </div>
       

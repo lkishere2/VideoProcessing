@@ -67,16 +67,24 @@ def extract_media_pyav(video_source, headers=None, fps: float = 1.0, max_frames:
     
     total_start = time.time()
     
-    # 1. Open the video container
+    # 1. Open the video container with low-latency constraints
     open_start = time.time()
+    options = {
+        'probesize': '32768',         # 32KB probe size limit
+        'analyzeduration': '100000',  # 100ms analysis limit
+        'fflags': 'nobuffer'          # Skip packet buffering
+    }
+    if headers:
+        headers_str = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
+        options['headers'] = headers_str
+        
     if isinstance(video_source, str) and (video_source.startswith("http://") or video_source.startswith("https://")):
-        headers_str = "".join(f"{k}: {v}\r\n" for k, v in headers.items()) if headers else ""
-        container = av.open(video_source, options={'headers': headers_str})
+        container = av.open(video_source, options=options)
     else:
         # Uploaded file or local file
         container = av.open(video_source)
     open_time = time.time() - open_start
-    print(f"[PyAV Profile] Opening media source took {open_time:.3f} seconds.")
+    print(f"  - [Step 2.1] Opening media source: {open_time:.3f}s")
         
     # 2. Find video and audio streams
     video_stream = None
@@ -91,94 +99,89 @@ def extract_media_pyav(video_source, headers=None, fps: float = 1.0, max_frames:
     if video_stream is None:
         raise RuntimeError("No video stream found in the source container.")
         
-    # Enable multi-threaded decoding
+    # Enable multi-threaded decoding and skip non-keyframes for speed
     video_stream.thread_type = 'AUTO'
+    video_stream.skip_frame = 'NONKEY'
     
     # Calculate duration
     duration = 0.0
     if container.duration:
         duration = float(container.duration) / av.time_base
         
-    # 3. Decode audio in-memory if present
+    # 3. Interleaved Single-Pass Decoding
     audio_start = time.time()
     audio_array = np.array([], dtype=np.float32)
+    
+    resampler = None
+    audio_buffer = io.BytesIO()
     if audio_stream is not None:
-        try:
-            resampler = av.AudioResampler(
-                format='flt', # float32
-                layout='mono',
-                rate=16000
-            )
-            audio_data = []
-            for frame in container.decode(audio_stream):
-                resampled = resampler.resample(frame)
-                if resampled:
-                    for f in resampled:
-                        audio_data.append(f.to_ndarray())
-                        
-            # Flush the resampler
-            flushed = resampler.resample(None)
-            if flushed:
-                for f in flushed:
-                    audio_data.append(f.to_ndarray())
-                    
-            if audio_data:
-                audio_array = np.concatenate(audio_data, axis=1).flatten()
-        except Exception as e:
-            print(f"[PyAV] Audio extraction failed: {e}")
-    audio_time = time.time() - audio_start
-    print(f"[PyAV Profile] Audio decoding & resampling took {audio_time:.3f} seconds.")
-            
-    # Seek back to beginning to decode video frames
-    container.seek(0)
-    
-    # 4. Decode video frames
-    video_start = time.time()
+        resampler = av.AudioResampler(
+            format='flt', # float32
+            layout='mono',
+            rate=16000
+        )
+        
     frames_in_memory = []
-    
     time_base = float(video_stream.time_base)
     next_target_time = 0.0
     interval = 1.0 / fps
     
-    for frame in container.decode(video_stream):
-        ts = float(frame.pts * time_base) if frame.pts is not None else frame.time
-        if ts >= next_target_time:
-            img = frame.to_image()
-            w, h = img.size
-            new_w = 400
-            new_h = int(h * (400 / w))
-            img_resized = img.resize((new_w, new_h))
-            
-            frames_in_memory.append({
-                "image": img_resized,
-                "timestamp": ts,
-                "index": len(frames_in_memory)
-            })
-            next_target_time += interval
-            
+    # Demux streams concurrently in a single network pass
+    streams_to_demux = [s for s in (video_stream, audio_stream) if s is not None]
+    for packet in container.demux(streams_to_demux):
+        for frame in packet.decode():
+            if packet.stream.type == 'audio' and resampler is not None:
+                resampled = resampler.resample(frame)
+                if resampled:
+                    for f in resampled:
+                        audio_buffer.write(bytes(f.planes[0]))
+                        
+            elif packet.stream.type == 'video':
+                ts = float(frame.pts * time_base) if frame.pts is not None else frame.time
+                if ts >= next_target_time:
+                    # Get quick 32x32 grayscale representation for scoring (extremely fast)
+                    img_gray = frame.to_image().convert('L').resize((32, 32))
+                    img_arr = np.array(img_gray, dtype=np.float32)
+                    
+                    frames_in_memory.append({
+                        "frame": frame, # Keep raw frame reference for lazy decoding
+                        "img_arr": img_arr,
+                        "timestamp": ts,
+                        "index": len(frames_in_memory)
+                    })
+                    next_target_time += interval
+                    
+    # Flush resampler if active
+    if resampler is not None:
+        flushed = resampler.resample(None)
+        if flushed:
+            for f in flushed:
+                audio_buffer.write(bytes(f.planes[0]))
+                
+    raw_bytes = audio_buffer.getvalue()
+    if raw_bytes:
+        audio_array = np.frombuffer(raw_bytes, dtype=np.float32).copy()
+        
     container.close()
-    video_time_spent = time.time() - video_start
-    print(f"[PyAV Profile] Video decoding & resizing took {video_time_spent:.3f} seconds. Decoded {len(frames_in_memory)} raw target frames.")
+    audio_time = time.time() - audio_start
+    print(f"  - [Step 2.2] Single-pass demuxing & decoding: {audio_time:.3f}s")
     
     if not frames_in_memory:
-        return [], audio_array, ""
+        return [], audio_array, "", audio_time
         
     if duration == 0.0:
         duration = frames_in_memory[-1]["timestamp"]
         
-    # 5. Score frames using grayscale differences
+    # 4. Score frames using the pre-computed 32x32 arrays
     scoring_start = time.time()
     category, min_frames = _duration_tier(duration)
     
     scored_frames = []
     prev_img = None
     for item in frames_in_memory:
-        img = item["image"]
+        img_arr = item["img_arr"]
         ts = item["timestamp"]
         idx = item["index"]
-        
-        img_gray = img.convert('L').resize((32, 32))
-        img_arr = np.array(img_gray, dtype=np.float32)
         
         if prev_img is not None:
             score = float(np.mean(np.abs(prev_img - img_arr)))
@@ -188,12 +191,11 @@ def extract_media_pyav(video_source, headers=None, fps: float = 1.0, max_frames:
         prev_img = img_arr
         scored_frames.append((idx, item, ts, score))
         
-    # Exclude the first 1.5s to bypass intro fade-ins
+    # Chronological Interval Selection
     valid_candidates = [f for f in scored_frames if f[2] > 1.5]
     if not valid_candidates:
         valid_candidates = scored_frames
         
-    # Determine target_count dynamically based on MVP score
     valid_candidates.sort(key=lambda x: x[3], reverse=True)
     guaranteed = valid_candidates[:min_frames]
     
@@ -205,7 +207,6 @@ def extract_media_pyav(video_source, headers=None, fps: float = 1.0, max_frames:
     else:
         target_count = min_frames
         
-    # Chronological Interval Selection
     valid_candidates.sort(key=lambda x: x[2])
     target_count = min(target_count, len(valid_candidates))
     
@@ -229,30 +230,32 @@ def extract_media_pyav(video_source, headers=None, fps: float = 1.0, max_frames:
                 closest = min(valid_candidates, key=lambda x: abs(x[2] - center))
                 selected_items.append(closest[1])
                 
-    # Deduplicate selected items
+    # Deduplicate and sort
     unique_selected = []
     seen_indices = set()
     for item in selected_items:
         if item["index"] not in seen_indices:
             unique_selected.append(item)
             seen_indices.add(item["index"])
-    selected_items = unique_selected
+            
+    unique_selected = sorted(unique_selected, key=lambda x: x["timestamp"])
     
-    # Sort chronologically
-    selected_items = sorted(selected_items, key=lambda x: x["timestamp"])
-    
-    # Save selected frames to temp directory for frontend static serving
+    # 5. Lazily decode and resize only the final selected frames to 400px
     temp_dir = tempfile.mkdtemp()
     results = []
-    for idx, item in enumerate(selected_items):
+    for idx, item in enumerate(unique_selected):
         frame_path = os.path.join(temp_dir, f"frame_{idx:04d}.jpg")
-        item["image"].save(frame_path, "JPEG", quality=90)
+        
+        img = item["frame"].to_image()
+        w, h = img.size
+        new_w = 400
+        new_h = int(h * (400 / w))
+        img_resized = img.resize((new_w, new_h))
+        img_resized.save(frame_path, "JPEG", quality=90)
+        
         results.append((frame_path, item["timestamp"]))
         
     scoring_time = time.time() - scoring_start
-    print(f"[PyAV Profile] Scoring, interval selection & disk save took {scoring_time:.3f} seconds. Kept {len(results)} frames.")
-    
-    total_time = time.time() - total_start
-    print(f"[PyAV Profile] TOTAL processing time: {total_time:.3f} seconds.")
+    print(f"  - [Step 2.3] Scoring, interval selection & lazy save: {scoring_time:.3f}s (Kept {len(results)} frames)")
     
     return sorted(results, key=lambda x: x[1]), audio_array, temp_dir, audio_time

@@ -26,6 +26,12 @@ def download_video(url: str) -> tuple[str, str, dict]:
         'format': 'best[height<=720]/best',
         'quiet': True,
         'no_warnings': True,
+        'noplaylist': True,
+        'playlist_items': '1',
+        'skip_download': True,
+        'check_formats': False,
+        'youtube_include_dash_manifest': False,
+        'youtube_include_hls_manifest': False,
         'extractor_args': {'youtube': {'player_client': ['android']}},
     }
     
