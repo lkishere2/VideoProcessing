@@ -116,31 +116,39 @@ def _transcribe_chunk_file(chunk_path: str) -> str:
     return " ".join(seg.text.strip() for seg in segments).strip()
 
 
-def transcribe_audio(audio_path: str):
+def transcribe_audio(audio_data):
     import time
     import io
     import soundfile as sf
+    import numpy as np
     from audio_pipeline import detect_sound_bursts, analyze_emotional_tone, extract_prosodic_features
     
     start_time = time.time()
+    sr_rate = 16000
     
-    if not os.path.exists(audio_path) or os.path.getsize(audio_path) == 0:
-        return []
-
-    try:
-        # Load full audio once into memory using soundfile (saves librosa import delay)
-        audio, sr_rate = sf.read(audio_path)
-        if len(audio.shape) > 1:
-            audio = audio.mean(axis=1)
-        duration_sec = len(audio) / sr_rate
-    except Exception as e:
-        print(f"[voice_processing] failed to load audio file '{audio_path}': {e}")
-        return []
-
-    # Run Whisper in a single pass over the entire file (much faster than chunk-by-chunk)
+    if isinstance(audio_data, str):
+        # Fallback if audio_path is passed
+        audio_path = audio_data
+        if not os.path.exists(audio_path) or os.path.getsize(audio_path) == 0:
+            return []
+        try:
+            audio, sr_rate = sf.read(audio_path)
+            if len(audio.shape) > 1:
+                audio = audio.mean(axis=1)
+        except Exception as e:
+            print(f"[voice_processing] failed to load audio file '{audio_path}': {e}")
+            return []
+    else:
+        # NumPy array passed directly
+        audio = audio_data
+        if audio is None or len(audio) == 0:
+            return []
+            
+    # Run Whisper in a single pass over the array directly (in-memory)
     try:
         model = get_whisper_model()
-        segments, _info = model.transcribe(audio_path, vad_filter=True)
+        # model.transcribe accepts the numpy array of float32
+        segments, _info = model.transcribe(audio, vad_filter=True)
         segments_list = list(segments)
     except Exception as e:
         print(f"[voice_processing] single-pass Whisper transcription failed: {e}")

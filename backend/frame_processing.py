@@ -58,127 +58,201 @@ def _duration_tier(duration: float) -> tuple[str, int]:
     else:
         return "long", 40
 
-def extract_frames(video_path: str, temp_dir: str, max_frames: int = 100) -> list[tuple[str, float]]:
-    """
-    Optimized Single-Pass Frame Extraction.
-    FFmpeg is invoked exactly once to extract a fixed density of frames (1.0 to 2.0 fps)
-    into RAM, directly resizing them to 400px width.
-    Python then performs chronological scene scoring and interval-based maxima selection
-    entirely in-memory, deleting the unselected images from disk.
-    """
-    start_time = time.time()
-
-    duration = get_video_duration(video_path)
-    category, min_frames = _duration_tier(duration)
-    pattern = os.path.join(temp_dir, "frame_%04d.jpg")
-
-    # Set extraction framerate dynamically
-    if duration <= 60:
-        fps = 2.0
-    elif duration <= 180:
-        fps = 1.0
-    else:
-        fps = 0.5
-
-    # Single-pass FFmpeg command limited to FFMPEG_THREADS to prevent core thrashing
-    command = [
-        "ffmpeg", "-y", "-threads", FFMPEG_THREADS, "-i", video_path,
-        "-vf", f"fps={fps},scale=400:-1",
-        "-qscale:v", "2",
-        pattern
-    ]
+def extract_media_pyav(video_source, headers=None, fps: float = 1.0, max_frames: int = 100) -> tuple[list[tuple[str, float]], np.ndarray, str, float]:
+    import av
+    import numpy as np
+    import io
+    import time
+    import tempfile
     
-    try:
-        subprocess.run(command, capture_output=True, check=True)
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"FFmpeg single-pass extraction failed: {e.stderr.decode().strip()}")
-
-    # Find the extracted files
-    files = sorted(f for f in os.listdir(temp_dir) if f.startswith("frame_") and f.endswith(".jpg"))
-    if not files:
-        return []
-
-    # Score frames using in-memory grayscale thumbnail differences (representing visual change)
+    total_start = time.time()
+    
+    # 1. Open the video container
+    open_start = time.time()
+    if isinstance(video_source, str) and (video_source.startswith("http://") or video_source.startswith("https://")):
+        headers_str = "".join(f"{k}: {v}\r\n" for k, v in headers.items()) if headers else ""
+        container = av.open(video_source, options={'headers': headers_str})
+    else:
+        # Uploaded file or local file
+        container = av.open(video_source)
+    open_time = time.time() - open_start
+    print(f"[PyAV Profile] Opening media source took {open_time:.3f} seconds.")
+        
+    # 2. Find video and audio streams
+    video_stream = None
+    audio_stream = None
+    
+    for stream in container.streams:
+        if stream.type == 'video' and video_stream is None:
+            video_stream = stream
+        elif stream.type == 'audio' and audio_stream is None:
+            audio_stream = stream
+            
+    if video_stream is None:
+        raise RuntimeError("No video stream found in the source container.")
+        
+    # Enable multi-threaded decoding
+    video_stream.thread_type = 'AUTO'
+    
+    # Calculate duration
+    duration = 0.0
+    if container.duration:
+        duration = float(container.duration) / av.time_base
+        
+    # 3. Decode audio in-memory if present
+    audio_start = time.time()
+    audio_array = np.array([], dtype=np.float32)
+    if audio_stream is not None:
+        try:
+            resampler = av.AudioResampler(
+                format='flt', # float32
+                layout='mono',
+                rate=16000
+            )
+            audio_data = []
+            for frame in container.decode(audio_stream):
+                resampled = resampler.resample(frame)
+                if resampled:
+                    for f in resampled:
+                        audio_data.append(f.to_ndarray())
+                        
+            # Flush the resampler
+            flushed = resampler.resample(None)
+            if flushed:
+                for f in flushed:
+                    audio_data.append(f.to_ndarray())
+                    
+            if audio_data:
+                audio_array = np.concatenate(audio_data, axis=1).flatten()
+        except Exception as e:
+            print(f"[PyAV] Audio extraction failed: {e}")
+    audio_time = time.time() - audio_start
+    print(f"[PyAV Profile] Audio decoding & resampling took {audio_time:.3f} seconds.")
+            
+    # Seek back to beginning to decode video frames
+    container.seek(0)
+    
+    # 4. Decode video frames
+    video_start = time.time()
+    frames_in_memory = []
+    
+    time_base = float(video_stream.time_base)
+    next_target_time = 0.0
+    interval = 1.0 / fps
+    
+    for frame in container.decode(video_stream):
+        ts = float(frame.pts * time_base) if frame.pts is not None else frame.time
+        if ts >= next_target_time:
+            img = frame.to_image()
+            w, h = img.size
+            new_w = 400
+            new_h = int(h * (400 / w))
+            img_resized = img.resize((new_w, new_h))
+            
+            frames_in_memory.append({
+                "image": img_resized,
+                "timestamp": ts,
+                "index": len(frames_in_memory)
+            })
+            next_target_time += interval
+            
+    container.close()
+    video_time_spent = time.time() - video_start
+    print(f"[PyAV Profile] Video decoding & resizing took {video_time_spent:.3f} seconds. Decoded {len(frames_in_memory)} raw target frames.")
+    
+    if not frames_in_memory:
+        return [], audio_array, ""
+        
+    if duration == 0.0:
+        duration = frames_in_memory[-1]["timestamp"]
+        
+    # 5. Score frames using grayscale differences
+    scoring_start = time.time()
+    category, min_frames = _duration_tier(duration)
+    
     scored_frames = []
     prev_img = None
-    for idx, filename in enumerate(files):
-        filepath = os.path.join(temp_dir, filename)
-        ts = (idx + 1) / fps
-
-        img_arr = _get_grayscale_thumbnail(filepath)
+    for item in frames_in_memory:
+        img = item["image"]
+        ts = item["timestamp"]
+        idx = item["index"]
+        
+        img_gray = img.convert('L').resize((32, 32))
+        img_arr = np.array(img_gray, dtype=np.float32)
+        
         if prev_img is not None:
-            score = _get_similarity(prev_img, img_arr)
+            score = float(np.mean(np.abs(prev_img - img_arr)))
         else:
             score = 0.0
+            
         prev_img = img_arr
-        scored_frames.append((idx, filepath, ts, score))
-
+        scored_frames.append((idx, item, ts, score))
+        
     # Exclude the first 1.5s to bypass intro fade-ins
     valid_candidates = [f for f in scored_frames if f[2] > 1.5]
     if not valid_candidates:
         valid_candidates = scored_frames
-
+        
     # Determine target_count dynamically based on MVP score
     valid_candidates.sort(key=lambda x: x[3], reverse=True)
     guaranteed = valid_candidates[:min_frames]
-
+    
     if guaranteed:
         total_mvp_score = sum(s[3] for s in guaranteed)
         avg_mvp_diff = total_mvp_score / len(guaranteed)
-        # Average difference of 20 (decent change) adds extra frames up to 100 max
         extra_frames_count = int(avg_mvp_diff * 4.0)
         target_count = min(max_frames, min_frames + extra_frames_count)
     else:
         target_count = min_frames
-
-    # Chronological Interval Selection (guarantees even spreading)
+        
+    # Chronological Interval Selection
     valid_candidates.sort(key=lambda x: x[2])
     target_count = min(target_count, len(valid_candidates))
-
-    selected_frames = []
+    
+    selected_items = []
     if target_count > 0:
         start_ts = valid_candidates[0][2]
         end_ts = valid_candidates[-1][2]
         video_duration = end_ts - start_ts
         interval_width = video_duration / target_count if video_duration > 0 else 1.0
-
+        
         for i in range(target_count):
             interval_start = start_ts + i * interval_width
             interval_end = interval_start + interval_width
-
+            
             candidates = [f for f in valid_candidates if interval_start <= f[2] <= interval_end]
             if candidates:
-                # Pick local maximum change frame inside this interval
                 best = max(candidates, key=lambda x: x[3])
-                selected_frames.append(best)
+                selected_items.append(best[1])
             else:
-                # Fallback to closest frame to the interval center
                 center = (interval_start + interval_end) / 2
                 closest = min(valid_candidates, key=lambda x: abs(x[2] - center))
-                selected_frames.append(closest)
-
-    # Deduplicate selected frames
+                selected_items.append(closest[1])
+                
+    # Deduplicate selected items
     unique_selected = []
     seen_indices = set()
-    for f in selected_frames:
-        if f[0] not in seen_indices:
-            unique_selected.append(f)
-            seen_indices.add(f[0])
-    selected_frames = unique_selected
-
-    # Delete unselected files from disk to keep temp_dir clean
-    selected_filepaths = {f[1] for f in selected_frames}
-    for filename in files:
-        path = os.path.join(temp_dir, filename)
-        if path not in selected_filepaths:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-
-    results = [(f[1], f[2]) for f in selected_frames]
-
-    end_time = time.time()
-    print(f'Single-pass frame extraction completed in {end_time - start_time:.3f} seconds. Extracted {len(files)} raw, kept {len(results)} frames.')
+    for item in selected_items:
+        if item["index"] not in seen_indices:
+            unique_selected.append(item)
+            seen_indices.add(item["index"])
+    selected_items = unique_selected
     
-    return sorted(results, key=lambda x: x[1])
+    # Sort chronologically
+    selected_items = sorted(selected_items, key=lambda x: x["timestamp"])
+    
+    # Save selected frames to temp directory for frontend static serving
+    temp_dir = tempfile.mkdtemp()
+    results = []
+    for idx, item in enumerate(selected_items):
+        frame_path = os.path.join(temp_dir, f"frame_{idx:04d}.jpg")
+        item["image"].save(frame_path, "JPEG", quality=90)
+        results.append((frame_path, item["timestamp"]))
+        
+    scoring_time = time.time() - scoring_start
+    print(f"[PyAV Profile] Scoring, interval selection & disk save took {scoring_time:.3f} seconds. Kept {len(results)} frames.")
+    
+    total_time = time.time() - total_start
+    print(f"[PyAV Profile] TOTAL processing time: {total_time:.3f} seconds.")
+    
+    return sorted(results, key=lambda x: x[1]), audio_array, temp_dir, audio_time

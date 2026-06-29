@@ -1,11 +1,14 @@
-anthropic
 ffmpeg-python
 fastapi
 uvicorn
 python-multipart
 aiofiles
 python-dotenv
+boto3
 Pillow
-torch
-openai-whisper
+numpy
+soundfile
+scikit-learn
+SpeechRecognition
+faster-whisper
 yt-dlp

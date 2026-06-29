@@ -42,8 +42,8 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from PIL import Image
 
-from frame_processing import extract_frames, frame_to_base64
-from voice_processing import extract_audio, transcribe_audio
+from frame_processing import extract_media_pyav, frame_to_base64
+from voice_processing import transcribe_audio
 from downloader import download_video
 from typing import Optional
 
@@ -98,6 +98,7 @@ async def process_video_endpoint(
     video_path = None
     temp_dir = None
     is_temp_download = False
+    http_headers = None
 
     try:
         if file:
@@ -113,26 +114,27 @@ async def process_video_endpoint(
                     detail=f"Unsupported file type '.{ext}'. Allowed: {sorted(ALLOWED_VIDEO_EXTENSIONS)}",
                 )
 
-            # Store uploaded file in a temp directory
-            temp_dir = tempfile.mkdtemp()
-            video_path = os.path.join(temp_dir, f"video.{ext}")
-
-            size = 0
-            with open(video_path, "wb") as buffer:
-                while chunk := await file.read(1024 * 1024):
-                    size += len(chunk)
-                    if size > MAX_UPLOAD_BYTES:
-                        raise HTTPException(
-                            status_code=413,
-                            detail=f"File exceeds maximum allowed size of {MAX_UPLOAD_BYTES // (1024*1024)} MB.",
-                        )
-                    buffer.write(chunk)
-        else:
-            # Download URL directly to /dev/shm (RAM)
+            # Validate file size without reading it fully to disk/memory
             try:
-                video_path, video_title = await asyncio.to_thread(download_video, url)
-                is_temp_download = True
-                temp_dir = tempfile.mkdtemp()  # Still need a temp_dir for extracted frames/audio
+                file.file.seek(0, 2)
+                size = file.file.tell()
+                file.file.seek(0)
+            except Exception:
+                size = 0
+
+            if size > MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File exceeds maximum allowed size of {MAX_UPLOAD_BYTES // (1024*1024)} MB.",
+                )
+
+            # Pass the SpooledTemporaryFile stream directly
+            video_source = file.file
+        else:
+            # Bypasses local download and resolve direct streaming URL instead
+            try:
+                video_source, video_title, http_headers = await asyncio.to_thread(download_video, url)
+                is_temp_download = False
             except Exception as e:
                 raise HTTPException(status_code=400, detail=str(e))
 
@@ -140,28 +142,20 @@ async def process_video_endpoint(
         
         loop = asyncio.get_running_loop()
         
-        # Launch independent extraction tasks concurrently in custom executor
-        frame_task = loop.run_in_executor(_pipeline_executor, extract_frames, video_path, temp_dir, 100)
-        audio_task = loop.run_in_executor(_pipeline_executor, extract_audio, video_path, temp_dir)
-
-        # Wait for both tasks to settle to guarantee no orphaned background writes
-        results = await asyncio.gather(frame_task, audio_task, return_exceptions=True)
-
-        # Check results and raise exceptions if any occurred
-        for res in results:
-            if isinstance(res, Exception):
-                raise HTTPException(status_code=400, detail=f"Preprocessing failed: {res}")
-
-        frame_results, audio_path = results[0], results[1]
-        frame_time = round(time.time() - extraction_start, 3)
-
-        # Transcribe depends on the audio file being ready
-        transcribe_start = time.time()
+        # Single-pass media stream extraction using PyAV: extracts both frames and audio directly in-memory
         try:
-            voice_segments = await loop.run_in_executor(_pipeline_executor, transcribe_audio, audio_path)
-        except Exception:
-            voice_segments = []
-        audio_time = round(time.time() - transcribe_start, 3)
+            frame_results, audio_array, temp_dir, audio_time_extracted = await loop.run_in_executor(
+                _pipeline_executor, extract_media_pyav, video_source, http_headers, float(fps), 100
+            )
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Preprocessing failed: {e}")
+
+        total_media_time = time.time() - extraction_start
+        audio_time = round(audio_time_extracted, 3)
+        frame_time = round(total_media_time - audio_time_extracted, 3)
+
+        # Whisper transcription bypassed to prioritize speed
+        voice_segments = []
 
         frames_data = []
         for index, (frame_path, timestamp) in enumerate(frame_results):
@@ -180,11 +174,29 @@ async def process_video_endpoint(
 
             voice_text = " ".join(chunk_voice).strip()
 
+            # Cut audio chunk corresponding to [t1, t2]
+            audio_b64 = None
+            if audio_array is not None and len(audio_array) > 0:
+                try:
+                    import soundfile as sf
+                    import io
+                    import base64
+                    start_sample = int(t1 * 16000)
+                    end_sample = min(int(t2 * 16000), len(audio_array))
+                    chunk_audio = audio_array[start_sample:end_sample]
+                    if len(chunk_audio) > 0:
+                        wav_io = io.BytesIO()
+                        sf.write(wav_io, chunk_audio, 16000, format='WAV', subtype='PCM_16')
+                        audio_b64 = "data:audio/wav;base64," + base64.b64encode(wav_io.getvalue()).decode("ascii")
+                except Exception as e:
+                    print(f"[video_processing] failed to slice/encode frame audio: {e}")
+
             frames_data.append({
                 "t1": t1,
                 "t2": t2,
                 "execution_time": 0.0,
                 "base64": f"data:image/jpeg;base64,{b64}",
+                "audio": audio_b64,
                 "voice_text": voice_text,
             })
 
@@ -202,7 +214,7 @@ async def process_video_endpoint(
         # Clean up frames temp directory
         if temp_dir and os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
-        # Clean up download from /dev/shm
+        # Clean up download from /tmp/shm
         if is_temp_download and video_path and os.path.exists(video_path):
             try:
                 os.remove(video_path)
