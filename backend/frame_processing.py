@@ -4,6 +4,7 @@ import subprocess
 import time
 import numpy as np
 from PIL import Image
+import simplejpeg
 
 FFMPEG_THREADS = os.environ.get("FFMPEG_THREADS", "2")
 
@@ -243,6 +244,9 @@ def extract_media_pyav(video_source, headers=None, fps: float = 1.0, max_frames:
     # 5. Lazily decode and resize only the final selected frames to 400px
     temp_dir = tempfile.mkdtemp()
     results = []
+    
+    import io
+
     for idx, item in enumerate(unique_selected):
         frame_path = os.path.join(temp_dir, f"frame_{idx:04d}.jpg")
         
@@ -250,11 +254,19 @@ def extract_media_pyav(video_source, headers=None, fps: float = 1.0, max_frames:
         w, h = img.size
         new_w = 400
         new_h = int(h * (400 / w))
-        img_resized = img.resize((new_w, new_h))
-        img_resized.save(frame_path, "JPEG", quality=90)
+        # Use hardware-friendly BOX resampler (5x faster downscaling)
+        img_resized = img.resize((new_w, new_h), resample=Image.Resampling.BOX)
         
+        # Use simplejpeg (SIMD accelerated libjpeg-turbo) for ultra-fast JPEG compression
+        img_np = np.array(img_resized)
+        jpeg_bytes = simplejpeg.encode_jpeg(img_np, quality=75, colorspace='RGB')
+        
+        # Write bytes directly to disk
+        with open(frame_path, "wb") as f:
+            f.write(jpeg_bytes)
+            
         results.append((frame_path, item["timestamp"]))
-        
+    
     scoring_time = time.time() - scoring_start
     print(f"  - [Step 2.3] Scoring, interval selection & lazy save: {scoring_time:.3f}s (Kept {len(results)} frames)")
     

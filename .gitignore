@@ -6,6 +6,10 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+videos/
+extracted_assets/
+test_output/
+verification_samples/
 
 # Outputs
 outputs/
